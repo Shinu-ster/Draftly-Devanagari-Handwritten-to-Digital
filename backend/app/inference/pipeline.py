@@ -1,42 +1,46 @@
 import cv2
-import numpy as np
-from app.inference.model_loader import get_model
-from app.segmentation.word_segmentation import segment_words
-from app.segmentation.character_segmentation import segment_characters
-from app.segmentation.zone_split import split_zones, prepare_img
+from app.segmentation.preprocessing import word_preprocess, char_preprocess
+from app.segmentation.word_segmentation import word_segmentation
+from app.segmentation.siro_rekha import siro_rekha_finder
+from app.segmentation.char_split import split_characters, find_low_level
+from app.segmentation.character_segmentation import character_segmentation
+from app.inference.recognizer import Recognizer
 
-def run_pipeline(image: np.ndarray) -> str:
-    """
-    image: single-channel binary word/line image, already thresholded once.
-    Returns reconstructed Unicode string.
-    """
-    words = segment_words(image)
-    output = []
+def process_word(word_img, is_last_word, recognizer):
+    prepimg, tb, lr = char_preprocess(word_img)
+    shape = prepimg.shape
 
-    for word_img in words:
-        chars = segment_characters(word_img)
-        for char_crop in chars:
-            zones = split_zones(char_crop)  # {main, upper, lower, half, digit, final}
-            unicode_char = classify_zones(zones)
-            output.append(unicode_char)
-        output.append(" ")
+    if is_last_word and not (shape[1] > int(1.2 * shape[0])):
+        recognizer.fc_recognition(prepimg)
+        return
 
-    return "".join(output).strip()
+    width = int((100 * shape[1]) / shape[0])
+    height = 100
+    resized = cv2.resize(prepimg, (width, height), interpolation=cv2.INTER_AREA)
+    resized = cv2.threshold(resized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+    main_img = resized.copy()  # replaces the old "resized.jpg" disk write/read
 
-def classify_zones(zones: dict) -> str:
-    result = ""
-    if zones.get("main") is not None:
-        img = prepare_img(zones["main"])
-        pred = get_model("imp").predict(img[None, ...], verbose=0)
-        result += decode_main(pred)
+    siro_rekha = siro_rekha_finder(resized)
 
-    if zones.get("upper1") is not None:
-        img = prepare_img(zones["upper1"])
-        pred = get_model("u1").predict(img[None, ...], verbose=0)
-        result += decode_u1(pred)
+    if siro_rekha == 0:
+        recognizer.d_recognition(prepimg)
+    else:
+        bordered = resized.copy()
+        segments = split_characters(bordered, siro_rekha, width, main_img)
+        low_level, lowest_level, average_low = find_low_level(segments)
+        character_segmentation(segments, siro_rekha, low_level, lowest_level, average_low, recognizer)
 
-    # ... same pattern for u2, lm, hc, d, fi
-    return result
 
-# decode_* functions map class index -> Unicode codepoint
-# keep a JSON/dict mapping per model, load once at startup
+def process_image(img: "np.ndarray") -> str:
+    """Full pipeline entry point: grayscale image in, Unicode text out."""
+    recognizer = Recognizer()
+    prepimg, tb, lr = word_preprocess(img)
+    words, num = word_segmentation(prepimg)
+
+    for count, word_img in enumerate(words):
+        is_last = (count == num - 1)
+        process_word(word_img, is_last, recognizer)
+        if not is_last:
+            recognizer.output.append(' ')
+
+    return recognizer.get_text()
