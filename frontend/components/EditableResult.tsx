@@ -5,6 +5,7 @@ import { useEditor, EditorContent, Extension } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
+import { TransliterationExtension } from "./TransliterationExtension";
 import Scratchpad from "./Scratchpad";
 
 interface HoldTarget {
@@ -190,7 +191,7 @@ export default function EditableResult({
   });
 
   const editor = useEditor({
-    extensions: [StarterKit, GraphemeHoldExtension],
+    extensions: [StarterKit, GraphemeHoldExtension, TransliterationExtension],
     content: text || "",
     editorProps: {
       attributes: {
