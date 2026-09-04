@@ -1,12 +1,17 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { useEditor, EditorContent, Extension } from "@tiptap/react";
+import { useState, useEffect, useRef, useCallback, useImperativeHandle, forwardRef } from "react";
+import { useEditor, EditorContent, Extension, useEditorState } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+import TextAlign from "@tiptap/extension-text-align";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { TransliterationExtension } from "./TransliterationExtension";
 import Scratchpad from "./Scratchpad";
+
+export interface EditableResultRef {
+  exportPdf: () => Promise<void>;
+}
 
 interface HoldTarget {
   from: number;
@@ -14,17 +19,24 @@ interface HoldTarget {
   char: string;
 }
 
-const GraphemeHoldPluginKey = new PluginKey("graphemeHold");
-
-export default function EditableResult({
-  text,
-  onChange,
-}: {
+interface EditableResultProps {
   text: string;
   onChange: (newText: string) => void;
-}) {
+  onExportingChange?: (isExporting: boolean) => void;
+}
+
+const GraphemeHoldPluginKey = new PluginKey("graphemeHold");
+
+const EditableResult = forwardRef<EditableResultRef, EditableResultProps>(function EditableResult(
+  { text, onChange, onExportingChange },
+  ref
+) {
   const [holdingTarget, setHoldingTarget] = useState<HoldTarget | null>(null);
   const [isScratchpadOpen, setIsScratchpadOpen] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportSuccess, setExportSuccess] = useState(false);
+
+  const isInternalUpdateRef = useRef(false);
   const holdingTargetRef = useRef<HoldTarget | null>(null);
   holdingTargetRef.current = holdingTarget;
 
@@ -191,28 +203,167 @@ export default function EditableResult({
   });
 
   const editor = useEditor({
-    extensions: [StarterKit, GraphemeHoldExtension, TransliterationExtension],
+    extensions: [
+      StarterKit,
+      TextAlign.configure({
+        types: ["heading", "paragraph"],
+        alignments: ["left", "center", "right", "justify"],
+        defaultAlignment: "left",
+      }),
+      GraphemeHoldExtension,
+      TransliterationExtension,
+    ],
     content: text || "",
+    immediatelyRender: false,
+    shouldRerenderOnTransaction: true,
     editorProps: {
       attributes: {
         class:
-          "prose prose-slate max-w-none font-devanagari text-2xl md:text-3xl leading-relaxed outline-none min-h-[180px] text-slate-900",
+          "font-devanagari text-2xl md:text-3xl leading-relaxed outline-none min-h-[180px] text-slate-900 focus:outline-none",
       },
     },
     onUpdate({ editor }) {
-      onChange(editor.getText());
+      isInternalUpdateRef.current = true;
+      onChange(editor.getText({ blockSeparator: "\n" }));
     },
   });
 
+  // Track reactive formatting and selection states using useEditorState
+  const editorState = useEditorState({
+    editor,
+    selector: (ctx) => {
+      if (!ctx.editor) {
+        return {
+          isBold: false,
+          isItalic: false,
+          isBulletList: false,
+          isOrderedList: false,
+          textAlign: "left",
+        };
+      }
+      return {
+        isBold: ctx.editor.isActive("bold"),
+        isItalic: ctx.editor.isActive("italic"),
+        isBulletList: ctx.editor.isActive("bulletList"),
+        isOrderedList: ctx.editor.isActive("orderedList"),
+        textAlign: ctx.editor.isActive({ textAlign: "center" })
+          ? "center"
+          : ctx.editor.isActive({ textAlign: "right" })
+          ? "right"
+          : ctx.editor.isActive({ textAlign: "justify" })
+          ? "justify"
+          : "left",
+      };
+    },
+  });
+
+  const isBold = editorState?.isBold ?? (editor ? editor.isActive("bold") : false);
+  const isItalic = editorState?.isItalic ?? (editor ? editor.isActive("italic") : false);
+  const isBulletList = editorState?.isBulletList ?? (editor ? editor.isActive("bulletList") : false);
+  const isOrderedList = editorState?.isOrderedList ?? (editor ? editor.isActive("orderedList") : false);
+  const currentAlign = editorState?.textAlign ?? "left";
+
   // Sync external text prop (e.g. fresh OCR prediction) into Tiptap doc
   useEffect(() => {
-    if (editor && text !== undefined) {
-      const currentText = editor.getText();
-      if (currentText !== text && text !== "") {
-        editor.commands.setContent(text);
-      }
+    if (!editor || text === undefined) return;
+    if (isInternalUpdateRef.current) {
+      isInternalUpdateRef.current = false;
+      return;
+    }
+    const currentText = editor.getText({ blockSeparator: "\n" });
+    if (currentText !== text && text !== "") {
+      editor.commands.setContent(text);
     }
   }, [text, editor]);
+
+  // Export editor content to PDF with complete formatting and Devanagari font support
+  const handleExportPdf = useCallback(async () => {
+    if (!editor) return;
+    setIsExporting(true);
+    onExportingChange?.(true);
+
+    try {
+      const html2pdfModule = await import("html2pdf.js");
+      const html2pdf = html2pdfModule.default;
+
+      // Create a print container with standard A4 dimensions
+      const container = document.createElement("div");
+      container.id = "draftly-print-area";
+      container.style.position = "fixed";
+      container.style.left = "-9999px";
+      container.style.top = "0";
+      container.style.width = "794px"; // A4 width at 96 DPI
+      container.style.backgroundColor = "#ffffff";
+      container.style.color = "#0f172a";
+      container.style.fontFamily = "'Noto Sans Devanagari', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+      container.style.padding = "48px";
+      container.style.boxSizing = "border-box";
+
+      const editorHtml = editor.getHTML();
+
+      container.innerHTML = `
+        <div style="border-bottom: 2px solid #e2e8f0; padding-bottom: 16px; margin-bottom: 28px; display: flex; justify-content: space-between; align-items: flex-end;">
+          <div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 24px; font-weight: 800; color: #0f172a; letter-spacing: -0.03em;">Draftly</span>
+              <span style="font-size: 11px; background: #f1f5f9; color: #475569; padding: 2px 8px; border-radius: 4px; font-family: sans-serif; font-weight: 600;">Devanagari Document</span>
+            </div>
+            <p style="margin: 6px 0 0 0; font-size: 12px; color: #64748b; font-family: sans-serif;">Devanagari Handwritten to Digital Recognized Text</p>
+          </div>
+          <div style="text-align: right; font-size: 11px; color: #94a3b8; font-family: sans-serif;">
+            ${new Date().toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}
+          </div>
+        </div>
+        <div class="draftly-export-content" style="font-size: 18px; line-height: 2; color: #1e293b;">
+          ${editorHtml}
+        </div>
+        <style>
+          .draftly-export-content p { margin-top: 0.5rem; margin-bottom: 0.5rem; }
+          .draftly-export-content ul { list-style-type: disc !important; margin-left: 2rem !important; padding-left: 0.25rem !important; margin-top: 0.75rem !important; margin-bottom: 0.75rem !important; }
+          .draftly-export-content ol { list-style-type: decimal !important; margin-left: 2rem !important; padding-left: 0.25rem !important; margin-top: 0.75rem !important; margin-bottom: 0.75rem !important; }
+          .draftly-export-content li { display: list-item !important; margin-top: 0.35rem !important; margin-bottom: 0.35rem !important; }
+          .draftly-export-content li p { display: inline !important; margin: 0 !important; }
+          .draftly-export-content strong, .draftly-export-content b { font-weight: 700 !important; color: #0f172a !important; }
+          .draftly-export-content em, .draftly-export-content i { font-style: italic !important; }
+        </style>
+      `;
+
+      document.body.appendChild(container);
+
+      const opt = {
+        margin: [12, 12, 12, 12] as [number, number, number, number],
+        filename: `Draftly_Export_${new Date().toISOString().slice(0, 10)}.pdf`,
+        image: { type: "jpeg" as const, quality: 0.98 },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          letterRendering: true,
+          logging: false,
+        },
+        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" as const },
+      };
+
+      await html2pdf().set(opt).from(container).save();
+      document.body.removeChild(container);
+
+      setExportSuccess(true);
+      setTimeout(() => setExportSuccess(false), 2500);
+    } catch (err) {
+      console.error("PDF generation failed, falling back to print:", err);
+      window.print();
+    } finally {
+      setIsExporting(false);
+      onExportingChange?.(false);
+    }
+  }, [editor, onExportingChange]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      exportPdf: handleExportPdf,
+    }),
+    [handleExportPdf]
+  );
 
   const handleScratchpadSubmit = (newChar: string) => {
     if (editor && holdingTarget) {
@@ -249,66 +400,191 @@ export default function EditableResult({
   return (
     <div className="flex flex-col gap-3">
       {/* Rich Text Editing Toolbar */}
-      <div className="flex items-center gap-1.5 border border-slate-200 bg-slate-50 p-1.5 rounded-md text-slate-700 select-none">
-        <button
-          type="button"
-          onClick={() => editor.chain().focus().toggleBold().run()}
-          className={`px-3 py-1 rounded text-xs font-semibold transition-colors flex items-center gap-1 ${
-            editor.isActive("bold")
-              ? "bg-slate-900 text-white shadow-sm"
-              : "hover:bg-slate-200 text-slate-700"
-          }`}
-          title="Bold"
-        >
-          <span className="font-bold">B</span>
-        </button>
+      <div className="flex flex-wrap items-center justify-between gap-2 border border-slate-200 bg-slate-50/90 p-1.5 rounded-md text-slate-700 select-none">
+        <div className="flex flex-wrap items-center gap-1">
+          {/* Bold Button */}
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().toggleBold().run()}
+            className={`px-2.5 py-1 rounded text-xs font-semibold transition-all flex items-center gap-1 ${
+              isBold
+                ? "bg-slate-900 text-white shadow-sm"
+                : "hover:bg-slate-200 text-slate-700 hover:text-slate-900"
+            }`}
+            title="Bold (Ctrl+B)"
+            aria-label="Bold"
+          >
+            <span className="font-bold text-sm leading-none">B</span>
+          </button>
 
-        <button
-          type="button"
-          onClick={() => editor.chain().focus().toggleItalic().run()}
-          className={`px-3 py-1 rounded text-xs font-semibold transition-colors flex items-center gap-1 ${
-            editor.isActive("italic")
-              ? "bg-slate-900 text-white shadow-sm"
-              : "hover:bg-slate-200 text-slate-700"
-          }`}
-          title="Italic"
-        >
-          <span className="italic font-serif">I</span>
-        </button>
+          {/* Italic Button */}
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().toggleItalic().run()}
+            className={`px-2.5 py-1 rounded text-xs font-semibold transition-all flex items-center gap-1 ${
+              isItalic
+                ? "bg-slate-900 text-white shadow-sm"
+                : "hover:bg-slate-200 text-slate-700 hover:text-slate-900"
+            }`}
+            title="Italic (Ctrl+I)"
+            aria-label="Italic"
+          >
+            <span className="italic font-serif text-sm leading-none">I</span>
+          </button>
 
-        <div className="h-4 w-px bg-slate-300 mx-1" />
+          <div className="h-4 w-px bg-slate-300 mx-1" />
 
-        <button
-          type="button"
-          onClick={() => editor.chain().focus().toggleBulletList().run()}
-          className={`px-3 py-1 rounded text-xs font-medium transition-colors flex items-center gap-1.5 ${
-            editor.isActive("bulletList")
-              ? "bg-slate-900 text-white shadow-sm"
-              : "hover:bg-slate-200 text-slate-700"
-          }`}
-          title="Bulleted List"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
-          <span>Bullet List</span>
-        </button>
+          {/* Bullet List Button */}
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().toggleBulletList().run()}
+            className={`px-2.5 py-1 rounded text-xs font-medium transition-all flex items-center gap-1.5 ${
+              isBulletList
+                ? "bg-slate-900 text-white shadow-sm"
+                : "hover:bg-slate-200 text-slate-700 hover:text-slate-900"
+            }`}
+            title="Bullet List"
+            aria-label="Bullet List"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" />
+            </svg>
+            <span className="hidden sm:inline">Bullet List</span>
+          </button>
 
-        <button
-          type="button"
-          onClick={() => editor.chain().focus().toggleOrderedList().run()}
-          className={`px-3 py-1 rounded text-xs font-medium transition-colors flex items-center gap-1.5 ${
-            editor.isActive("orderedList")
-              ? "bg-slate-900 text-white shadow-sm"
-              : "hover:bg-slate-200 text-slate-700"
-          }`}
-          title="Numbered List"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 6h13M7 12h13M7 18h13M3 6h.01M3 12h.01M3 18h.01" />
-          </svg>
-          <span>Numbered List</span>
-        </button>
+          {/* Numbered List Button */}
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().toggleOrderedList().run()}
+            className={`px-2.5 py-1 rounded text-xs font-medium transition-all flex items-center gap-1.5 ${
+              isOrderedList
+                ? "bg-slate-900 text-white shadow-sm"
+                : "hover:bg-slate-200 text-slate-700 hover:text-slate-900"
+            }`}
+            title="Numbered List"
+            aria-label="Numbered List"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6h10M10 12h10M10 18h10M4 6h1v4m-1 0h2m-2 4h2v2H4v2h2" />
+            </svg>
+            <span className="hidden sm:inline">Numbered List</span>
+          </button>
+
+          <div className="h-4 w-px bg-slate-300 mx-1" />
+
+          {/* Text Alignment Controls */}
+          <div className="flex items-center gap-0.5 bg-slate-200/70 p-0.5 rounded">
+            {/* Left Align */}
+            <button
+              type="button"
+              onClick={() => editor.chain().focus().setTextAlign("left").run()}
+              className={`p-1.5 rounded transition-all ${
+                currentAlign === "left"
+                  ? "bg-white text-slate-900 shadow-xs font-bold"
+                  : "text-slate-600 hover:text-slate-900 hover:bg-slate-200"
+              }`}
+              title="Align Left"
+              aria-label="Align Left"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h10M4 18h14" />
+              </svg>
+            </button>
+
+            {/* Center Align */}
+            <button
+              type="button"
+              onClick={() => editor.chain().focus().setTextAlign("center").run()}
+              className={`p-1.5 rounded transition-all ${
+                currentAlign === "center"
+                  ? "bg-white text-slate-900 shadow-xs font-bold"
+                  : "text-slate-600 hover:text-slate-900 hover:bg-slate-200"
+              }`}
+              title="Align Center"
+              aria-label="Align Center"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M7 12h10M5 18h14" />
+              </svg>
+            </button>
+
+            {/* Right Align */}
+            <button
+              type="button"
+              onClick={() => editor.chain().focus().setTextAlign("right").run()}
+              className={`p-1.5 rounded transition-all ${
+                currentAlign === "right"
+                  ? "bg-white text-slate-900 shadow-xs font-bold"
+                  : "text-slate-600 hover:text-slate-900 hover:bg-slate-200"
+              }`}
+              title="Align Right"
+              aria-label="Align Right"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M10 12h10M6 18h14" />
+              </svg>
+            </button>
+
+            {/* Justify Align */}
+            <button
+              type="button"
+              onClick={() => editor.chain().focus().setTextAlign("justify").run()}
+              className={`p-1.5 rounded transition-all ${
+                currentAlign === "justify"
+                  ? "bg-white text-slate-900 shadow-xs font-bold"
+                  : "text-slate-600 hover:text-slate-900 hover:bg-slate-200"
+              }`}
+              title="Justify"
+              aria-label="Justify"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        {/* Right Section: Export PDF */}
+        <div className="flex items-center gap-1.5">
+          {/* <button */}
+          {/*   type="button" */}
+          {/*   onClick={handleExportPdf} */}
+          {/*   disabled={isExporting} */}
+          {/*   className={`px-2.5 py-1 rounded text-xs font-medium transition-all flex items-center gap-1.5 border ${ */}
+          {/*     exportSuccess */}
+          {/*       ? "bg-emerald-50 text-emerald-700 border-emerald-300" */}
+          {/*       : isExporting */}
+          {/*       ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed" */}
+          {/*       : "bg-white text-slate-700 border-slate-300 hover:bg-slate-100 hover:text-slate-900 shadow-xs" */}
+          {/*   }`} */}
+          {/*   title="Export editor content as PDF" */}
+          {/*   aria-label="Export PDF" */}
+          {/* > */}
+          {/*   {isExporting ? ( */}
+          {/*     <> */}
+          {/*       <svg className="animate-spin w-3.5 h-3.5 text-slate-500" fill="none" viewBox="0 0 24 24"> */}
+          {/*         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /> */}
+          {/*         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /> */}
+          {/*       </svg> */}
+          {/*       <span>Exporting...</span> */}
+          {/*     </> */}
+          {/*   ) : exportSuccess ? ( */}
+          {/*     <> */}
+          {/*       <svg className="w-3.5 h-3.5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"> */}
+          {/*         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /> */}
+          {/*       </svg> */}
+          {/*       <span className="font-semibold text-emerald-700">Downloaded!</span> */}
+          {/*     </> */}
+          {/*   ) : ( */}
+          {/*     <> */}
+          {/*       <svg className="w-3.5 h-3.5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"> */}
+          {/*         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /> */}
+          {/*       </svg> */}
+          {/*       <span className="font-medium">Export PDF</span> */}
+          {/*     </> */}
+          {/*   )} */}
+          {/* </button> */}
+        </div>
       </div>
 
       {/* Tiptap Rich Text Editor Body */}
@@ -326,4 +602,7 @@ export default function EditableResult({
       )}
     </div>
   );
-}
+});
+
+export default EditableResult;
+

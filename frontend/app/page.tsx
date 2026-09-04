@@ -1,6 +1,6 @@
 "use client";
-import { useState } from "react";
-import EditableResult from "@/components/EditableResult";
+import { useState, useRef } from "react";
+import EditableResult, { EditableResultRef } from "@/components/EditableResult";
 
 export default function Home() {
   const [result, setResult] = useState("");
@@ -9,6 +9,9 @@ export default function Home() {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [pdfDownloaded, setPdfDownloaded] = useState(false);
+  const editorRef = useRef<EditableResultRef>(null);
 
   function getApiUrl(): string {
     if (typeof window !== "undefined") {
@@ -90,6 +93,20 @@ export default function Home() {
     navigator.clipboard.writeText(result);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  }
+
+  async function handleExportPdf() {
+    if (!editorRef.current) return;
+    setIsExportingPdf(true);
+    try {
+      await editorRef.current.exportPdf();
+      setPdfDownloaded(true);
+      setTimeout(() => setPdfDownloaded(false), 2500);
+    } catch (err) {
+      console.error("PDF export error:", err);
+    } finally {
+      setIsExportingPdf(false);
+    }
   }
 
   function clearAll() {
@@ -277,7 +294,8 @@ export default function Home() {
                     </span>
                     <button
                       onClick={copyToClipboard}
-                      className="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium transition-colors flex items-center gap-1.5"
+                      className="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium transition-colors flex items-center gap-1.5 shadow-2xs"
+                      title="Copy plain text to clipboard"
                     >
                       {copied ? (
                         <>
@@ -295,6 +313,43 @@ export default function Home() {
                         </>
                       )}
                     </button>
+
+                    {/* <button */}
+                    {/*   onClick={handleExportPdf} */}
+                    {/*   disabled={isExportingPdf} */}
+                    {/*   className={`px-3 py-1.5 rounded-md border text-xs font-medium transition-colors flex items-center gap-1.5 shadow-2xs ${ */}
+                    {/*     pdfDownloaded */}
+                    {/*       ? "border-emerald-300 bg-emerald-50 text-emerald-700" */}
+                    {/*       : isExportingPdf */}
+                    {/*       ? "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed" */}
+                    {/*       : "border-slate-300 bg-white hover:bg-slate-50 text-slate-700" */}
+                    {/*   }`} */}
+                    {/*   title="Export editor content to PDF" */}
+                    {/* > */}
+                    {/*   {isExportingPdf ? ( */}
+                    {/*     <> */}
+                    {/*       <svg className="animate-spin w-3.5 h-3.5 text-slate-500" fill="none" viewBox="0 0 24 24"> */}
+                    {/*         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /> */}
+                    {/*         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" /> */}
+                    {/*       </svg> */}
+                    {/*       <span>Exporting...</span> */}
+                    {/*     </> */}
+                    {/*   ) : pdfDownloaded ? ( */}
+                    {/*     <> */}
+                    {/*       <svg className="w-3.5 h-3.5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"> */}
+                    {/*         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /> */}
+                    {/*       </svg> */}
+                    {/*       <span className="font-semibold text-emerald-700">Downloaded</span> */}
+                    {/*     </> */}
+                    {/*   ) : ( */}
+                    {/*     <> */}
+                    {/*       <svg className="w-3.5 h-3.5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"> */}
+                    {/*         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /> */}
+                    {/*       </svg> */}
+                    {/*       <span>Export PDF</span> */}
+                    {/*     </> */}
+                    {/*   )} */}
+                    {/* </button> */}
                   </div>
                 )}
               </div>
@@ -307,9 +362,12 @@ export default function Home() {
                     <span>Press and hold any character for 0.5s to open the Scratchpad canvas and re-classify.</span>
                   </div>
 
-                  <div className="bg-white border border-slate-200 rounded-md p-5 min-h-[220px]">
-                    <EditableResult text={result} onChange={setResult} />
-                  </div>
+                  <EditableResult
+                    ref={editorRef}
+                    text={result}
+                    onChange={setResult}
+                    onExportingChange={setIsExportingPdf}
+                  />
                 </div>
               ) : (
                 <div className="flex-1 flex flex-col items-center justify-center p-8 border border-dashed border-slate-200 rounded-md text-center bg-slate-50/50 min-h-[280px]">

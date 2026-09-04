@@ -34,4 +34,61 @@
   background: #94a3b8;
 }
 
+/* Tiptap Editor & List Styling */
+.tiptap {
+  outline: none;
+}
+
+.tiptap p {
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+}
+
+.tiptap ul,
+.tiptap ul[data-type="bulletList"] {
+  list-style-type: disc !important;
+  margin-left: 1.75rem !important;
+  padding-left: 0.25rem !important;
+  margin-top: 0.5rem !important;
+  margin-bottom: 0.5rem !important;
+}
+
+.tiptap ol,
+.tiptap ol[data-type="orderedList"] {
+  list-style-type: decimal !important;
+  margin-left: 1.75rem !important;
+  padding-left: 0.25rem !important;
+  margin-top: 0.5rem !important;
+  margin-bottom: 0.5rem !important;
+}
+
+.tiptap li {
+  display: list-item !important;
+  margin-top: 0.25rem !important;
+  margin-bottom: 0.25rem !important;
+}
+
+.tiptap li p {
+  display: inline !important;
+  margin: 0 !important;
+}
+
+/* Print styles for document printing/PDF */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #draftly-print-area, #draftly-print-area * {
+    visibility: visible;
+  }
+  #draftly-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    padding: 20mm;
+    background: white;
+  }
+}
+
 
