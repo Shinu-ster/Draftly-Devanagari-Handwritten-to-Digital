@@ -27,11 +27,6 @@ Unlike traditional OCR systems, Draftly uses a **divide-and-conquer strategy** b
 ### Motivation
 Manual conversion of handwritten Nepali text is slow, error-prone, and inefficient. Draftly addresses this problem by providing an automated and accessible solution for digitizing handwritten documents, especially for under-resourced scripts like Devanagari.
 
-### Images
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/e50f4eb0-53dc-428e-8c56-8da36e61b2d6" />
-
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/2efa5505-fa3f-4159-8dc9-55a3f8f121c3" />
-
 
 ---
 
